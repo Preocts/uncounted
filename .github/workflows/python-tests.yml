@@ -1,0 +1,110 @@
+name: "python tests and coverage"
+# Uses:
+# https://github.com/actions/checkout : v7.0.1 3d3c42e5aac5ba805825da76410c181273ba90b1
+# https://github.com/actions/download-artifact : v8.0.1 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+# https://github.com/actions/upload-artifact : v7.0.0 bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+# https://github.com/astral-sh/setup-uv : v10.0.1 20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  set-statics:
+    name: "Set static values"
+    runs-on: "ubuntu-slim"
+    outputs:
+      linux-version: "ubuntu-26.04"
+      uv-version: "0.12.7"
+
+    steps:
+      - name: "Set Statics"
+        run: echo ""
+
+  run-tests-and-coverage:
+    name: "Run nox for tests and coverage"
+    needs: "set-statics"
+    runs-on: "${{ matrix.os }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - "${{ needs.set-statics.outputs.linux-version }}"
+        python-version:
+          - "3.14"
+
+    steps:
+      - name: "Repo checkout"
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+
+      - name: "Install the latest version of uv"
+        uses: "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+        with:
+          version: "${{ needs.set-statics.outputs.uv-version }}"
+          python-version: "${{ matrix.python-version }}"
+          enable-cache: true
+
+      - name: "Run tests and coverage via nox"
+        run: "uvx nox --session test -- partial-coverage"
+
+      - name: "Save coverage artifact"
+        uses: "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f"
+        with:
+          name: "coverage-artifact-${{ matrix.os}}-${{ matrix.python-version}}"
+          path: ".coverage.*"
+          retention-days: 1
+          include-hidden-files: true
+
+  coverage-compile:
+    name: "coverage compile"
+    needs: ["set-statics", "run-tests-and-coverage"]
+    runs-on: "${{ needs.set-statics.outputs.linux-version }}"
+    steps:
+      - name: "Repo checkout"
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+
+      - name: "Install the latest version of uv"
+        uses: "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+        with:
+          version: "${{ needs.set-statics.outputs.uv-version }}"
+          enable-cache: true
+
+      - name: "Download coverage artifacts"
+        uses: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+        with:
+          pattern: "coverage-artifact-*"
+          merge-multiple: true
+
+      - name: "Compile coverage data"
+        run: "uvx nox --session combine"
+
+      - name: "Post summary to step summary"
+        run: |
+          export TOTAL=$(python -c "import json;print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
+          echo "COVERAGE-TOTAL=$TOTAL" >> $GITHUB_ENV
+
+  linters-and-formatters:
+    name: "linters and formatters"
+    needs: "set-statics"
+    runs-on: "${{ needs.set-statics.outputs.linux-version }}"
+    steps:
+      - name: "Repo checkout"
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+
+      - name: "Install the latest version of uv"
+        uses: "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+        with:
+          version: "${{ needs.set-statics.outputs.uv-version }}"
+          enable-cache: true
+
+      - name: "Run linters and formatters"
+        run: "uvx nox --session format lint"
+
+      - name: "Check for any unstaged changes"
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "#### Format or Lint changes found. Please run 'uvx nox' locally and push the changes." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
