@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import enum
 import json
 import pathlib
 import re
@@ -9,6 +10,12 @@ import re
 CHARACTERS_PER_WORD = 6
 WORDS_PER_PAGE = 250
 PINFILE_NAME = "{prefix}-uncounted-pinfile.json"
+
+
+class Command(enum.StrEnum):
+    PIN = "pin"
+    DIFF = "diff"
+    STATS = "stats"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -20,11 +27,10 @@ class FileData:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class CLIFlags:
+class CLIArgs:
+    command: Command
     target_path: str
     file_pattern: str
-    pin: bool
-    diff: bool
 
 
 def clean_whitespace(content: str) -> str:
@@ -100,15 +106,21 @@ def load_pin_file(target_path: pathlib.Path) -> dict[str, FileData]:
     return {}
 
 
-def main(cli_flags: CLIFlags) -> int:
+def main(cli_args: CLIArgs) -> int:
     """The main function."""
-    target_path = pathlib.Path(cli_flags.target_path)
+    target_path = pathlib.Path(cli_args.target_path)
 
     all_data = {}
 
     file: pathlib.Path
 
-    for file in target_path.glob(cli_flags.file_pattern):
+    files = list(target_path.glob(cli_args.file_pattern))
+
+    if not len(files):
+        print(f"No files discovered. '{cli_args.target_path}' - '{cli_args.file_pattern}'")
+        return 0
+
+    for file in files:
         if not file.is_file(follow_symlinks=False):
             continue
 
@@ -116,11 +128,11 @@ def main(cli_flags: CLIFlags) -> int:
 
         all_data[file.name] = data
 
-    if cli_flags.diff:
+    if cli_args.command is Command.DIFF:
         load_pin_file(target_path)
         print("Diff not created yet.")
 
-    elif cli_flags.pin:
+    elif cli_args.command is Command.PIN:
         save_pin_file(target_path, all_data)
 
     else:
@@ -129,21 +141,33 @@ def main(cli_flags: CLIFlags) -> int:
     return 0
 
 
-def parse_args(args: list[str] | None = None) -> CLIFlags:
+def parse_args(args: list[str] | None = None) -> CLIArgs:
     parser = argparse.ArgumentParser("uncounted")
 
-    parser.add_argument("target_path", default=".")
-    parser.add_argument("file_pattern", nargs="?", default="*.txt")
-    parser.add_argument("--pin", action="store_true", default=False)
-    parser.add_argument("--diff", action="store_true", default=False)
+    parser.add_argument(
+        "command",
+        default="stats",
+        nargs="?",
+        choices=("pin", "diff", "stats"),
+        help="Command to run. Default is 'stats'",
+    )
+    parser.add_argument(
+        "--path",
+        default=".",
+        help="Define the working path. Defaults to the current working directory.",
+    )
+    parser.add_argument(
+        "--pattern",
+        default="*.txt",
+        help="Glob pattern of files to process. Not recursive.",
+    )
 
     parsed_args = parser.parse_args(args)
 
-    return CLIFlags(
-        target_path=parsed_args.target_path,
-        file_pattern=parsed_args.file_pattern,
-        pin=parsed_args.pin,
-        diff=parsed_args.diff,
+    return CLIArgs(
+        command=Command(parsed_args.command),
+        target_path=parsed_args.path,
+        file_pattern=parsed_args.pattern,
     )
 
 
